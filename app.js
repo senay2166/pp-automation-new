@@ -5,8 +5,8 @@ if ('serviceWorker' in navigator) {
 }
 
 // KONFIGURASI DATABASE FULL GITHUB API
-const GH_TOKEN = "MOHON_GANTI_DENGAN_TOKEN_GITHUB_PAT_ANDA";
-const GH_USER = "MOHON_GANTI_USERNAME_GITHUB_ANDA";
+const GH_TOKEN = "github_pat_11A5XXXXXXXX_MOHON_GANTI_DENGAN_TOKEN_ANDA_YANG_ASLI";
+const GH_USER = "MOHON_GANTI_DENGAN_USERNAME_GITHUB_ANDA";
 const GH_REPO = "pp-automation-new";
 const GH_FILE_PATH = "database_aset.json"; // File ini akan otomatis terbuat di GitHub Anda
 
