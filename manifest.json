@@ -1,0 +1,16 @@
+{
+  "short_name": "PP-Automation",
+  "name": "Asset Management & Automation",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2345/2345338.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "./index.html",
+  "background_color": "#1e293b",
+  "theme_color": "#0f172a",
+  "display": "standalone",
+  "orientation": "portrait"
+}

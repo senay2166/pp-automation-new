@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PP-Automation Asset Management</title>
+  <link rel="manifest" href="manifest.json">
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans min-h-screen">
+
+  <div id="login-page" class="flex items-center justify-center min-h-screen">
+    <div class="bg-gray-800 p-8 rounded-xl shadow-2xl w-full max-w-md border border-gray-700">
+      <h2 class="text-3xl font-bold text-center text-blue-500 mb-6">PP-AUTOMATION</h2>
+      <div class="mb-4">
+        <label class="block text-sm font-medium mb-1">Username / Area</label>
+        <input type="text" id="username" class="w-full p-3 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-500" placeholder="Contoh: Admin_Sorowako atau Engineer_Bogor">
+      </div>
+      <div class="mb-6">
+        <label class="block text-sm font-medium mb-1">Role</label>
+        <select id="user-role" class="w-full p-3 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-500">
+          <option value="SuperAdmin">Super Admin (Bisa Custom Menu GUI)</option>
+          <option value="Admin_Sorowako">Admin Area Sorowako</option>
+          <option value="Admin_Bogor">Admin Area Bogor</option>
+          <option value="Engineer">Field Engineer</option>
+        </select>
+      </div>
+      <button onclick="login()" class="w-full bg-blue-600 hover:bg-blue-700 p-3 rounded font-bold transition duration-200">Masuk Aplikasi</button>
+    </div>
+  </div>
+
+  <div id="main-app" class="hidden flex flex-col md:flex-row min-h-screen">
+    <aside class="w-full md:w-64 bg-gray-800 p-6 border-r border-gray-700">
+      <div class="flex items-center justify-between mb-8">
+        <div>
+          <h2 class="text-xl font-bold text-blue-400" id="display-username">User</h2>
+          <span class="text-xs text-gray-400" id="display-role">Role</span>
+        </div>
+        <span id="sync-status" class="px-2 py-1 text-xs rounded bg-green-500 text-white font-bold">Online</span>
+      </div>
+      
+      <nav id="dynamic-menu" class="space-y-2">
+        <button onclick="switchTab('dashboard')" class="w-full text-left p-3 rounded hover:bg-gray-700 font-medium transition block bg-blue-600">📊 Dashboard</button>
+        <button onclick="switchTab('asset-master')" class="w-full text-left p-3 rounded hover:bg-gray-700 font-medium transition block">📦 Master Asset & QR</button>
+        <button onclick="switchTab('history-perbaikan')" class="w-full text-left p-3 rounded hover:bg-gray-700 font-medium transition block">🛠️ History Perbaikan</button>
+      </nav>
+
+      <div id="admin-gui-builder" class="hidden mt-8 pt-6 border-t border-gray-700">
+        <p class="text-xs text-gray-400 font-bold uppercase tracking-wider mb-2">GUI Customizer</p>
+        <button onclick="openMenuBuilder()" class="w-full bg-purple-600 hover:bg-purple-700 text-xs p-2 rounded font-bold transition">⚡ Tambah Menu Baru (GUI)</button>
+      </div>
+
+      <button onclick="logout()" class="w-full mt-auto bg-red-600 hover:bg-red-700 p-2 text-sm rounded font-bold transition mt-8">Keluar</button>
+    </aside>
+
+    <main class="flex-1 p-8 overflow-y-auto">
+      <section id="tab-dashboard" class="tab-content">
+        <h1 class="text-3xl font-extrabold mb-6">Dashboard Utama</h1>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+            <p class="text-gray-400 text-sm font-semibold uppercase">Total Asset</p>
+            <h3 class="text-4xl font-bold text-blue-500 mt-2" id="dash-total-asset">0</h3>
+          </div>
+          <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+            <p class="text-gray-400 text-sm font-semibold uppercase">Total Perbaikan</p>
+            <h3 class="text-4xl font-bold text-yellow-500 mt-2" id="dash-total-repair">0</h3>
+          </div>
+          <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+            <p class="text-gray-400 text-sm font-semibold uppercase">Data Belum Sinkron (Offline)</p>
+            <h3 class="text-4xl font-bold text-red-500 mt-2" id="dash-offline-count">0</h3>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-asset-master" class="tab-content hidden">
+        <h1 class="text-3xl font-extrabold mb-6">Master Asset & QR Code</h1>
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 mb-8">
+          <h3 class="text-lg font-bold text-blue-400 mb-4">Tambah / Update Asset (Bisa Offline)</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <input type="text" id="asset-id" placeholder="ID Asset (e.g. AST-001)" class="p-3 rounded bg-gray-700 border border-gray-600">
+            <input type="text" id="asset-name" placeholder="Nama Asset" class="p-3 rounded bg-gray-700 border border-gray-600">
+            <input type="text" id="asset-area" placeholder="Area Lokasi" class="p-3 rounded bg-gray-700 border border-gray-600">
+            <input type="text" id="asset-status" placeholder="Kondisi Suku Cadang/Mesin" class="p-3 rounded bg-gray-700 border border-gray-600">
+          </div>
+          <button onclick="saveAsset()" class="bg-green-600 hover:bg-green-700 px-6 py-3 rounded font-bold transition">Simpan Asset</button>
+        </div>
+
+        <div id="qr-wrapper" class="hidden bg-white p-4 rounded-lg inline-block mb-6 text-center">
+          <div id="qrcode" class="mb-2"></div>
+          <span class="text-black text-sm font-bold" id="qr-label"></span>
+        </div>
+
+        <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-gray-700 text-gray-300 uppercase text-xs">
+                <th class="p-4">ID Asset</th>
+                <th class="p-4">Nama Asset</th>
+                <th class="p-4">Area</th>
+                <th class="p-4">Kondisi</th>
+                <th class="p-4">Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="asset-table-body" class="divide-y divide-gray-700"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tab-history-perbaikan" class="tab-content hidden">
+        <h1 class="text-3xl font-extrabold mb-6">Log History Perbaikan & Maintenance</h1>
+        <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-gray-700 text-gray-300 uppercase text-xs">
+                <th class="p-4">Waktu Log</th>
+                <th class="p-4">ID Asset</th>
+                <th class="p-4">User Penanggung Jawab</th>
+                <th class="p-4">Area Kerja</th>
+                <th class="p-4">Aktivitas Mekanik</th>
+              </tr>
+            </thead>
+            <tbody id="history-table-body" class="divide-y divide-gray-700"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="dynamic-tab-template" class="tab-content hidden">
+        <h1 class="text-3xl font-extrabold mb-4" id="dynamic-title">Menu Kustom</h1>
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700">
+          <p class="text-gray-400">Gunakan GUI builder untuk mengisi fungsionalitas tombol/form di menu ini tanpa koding.</p>
+          <div class="mt-4 space-x-2" id="dynamic-actions-area"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
