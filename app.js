@@ -4,12 +4,19 @@ if ('serviceWorker' in navigator) {
     .catch(err => console.log("Gagal PWA:", err));
 }
 
-let currentUser = null;
-let currentRole = null;
+// KONFIGURASI DATABASE FULL GITHUB API
+const GH_TOKEN = "MOHON_GANTI_DENGAN_TOKEN_GITHUB_PAT_ANDA";
+const GH_USER = "MOHON_GANTI_USERNAME_GITHUB_ANDA";
+const GH_REPO = "pp-automation-new";
+const GH_FILE_PATH = "database_aset.json"; // File ini akan otomatis terbuat di GitHub Anda
+
+let currentUser = localStorage.getItem('current_user') || null;
+let currentRole = localStorage.getItem('current_role') || null;
 let databaseAset = JSON.parse(localStorage.getItem('db_aset')) || [];
 let databaseHistory = JSON.parse(localStorage.getItem('db_history')) || [];
 let customMenus = JSON.parse(localStorage.getItem('db_menus')) || [];
 let pendingSyncLogs = JSON.parse(localStorage.getItem('pending_sync')) || [];
+let currentFileSha = null; // Dibutuhkan oleh GitHub API untuk update file
 
 window.addEventListener('online', handleOnlineStatus);
 window.addEventListener('offline', handleOnlineStatus);
@@ -19,7 +26,7 @@ function handleOnlineStatus() {
   if (navigator.onLine) {
     statusEl.innerText = "Online";
     statusEl.className = "px-2 py-1 text-xs rounded bg-green-500 text-white font-bold";
-    autoSyncData();
+    autoSyncData(); 
   } else {
     statusEl.innerText = "Offline Mode";
     statusEl.className = "px-2 py-1 text-xs rounded bg-red-500 text-white font-bold";
@@ -38,6 +45,8 @@ function login() {
 
   currentUser = username;
   currentRole = role;
+  localStorage.setItem('current_user', currentUser);
+  localStorage.setItem('current_role', currentRole);
 
   document.getElementById('display-username').innerText = currentUser;
   document.getElementById('display-role').innerText = currentRole;
@@ -52,7 +61,7 @@ function login() {
 
   logActivity("SYSTEM", `User ${currentUser} berhasil login menggunakan role ${currentRole}`);
   loadCustomMenus();
-  renderAssetsTable();
+  fetchCentralData(); // Tarik data JSON langsung dari repositori GitHub pusat
   renderHistoryTable();
   handleOnlineStatus();
 }
@@ -61,6 +70,8 @@ function logout() {
   logActivity("SYSTEM", `User ${currentUser} melakukan logout dari sistem`);
   currentUser = null;
   currentRole = null;
+  localStorage.removeItem('current_user');
+  localStorage.removeItem('current_role');
   document.getElementById('login-page').classList.remove('hidden');
   document.getElementById('main-app').classList.add('hidden');
 }
@@ -71,6 +82,35 @@ function switchTab(tabName) {
   const targetTab = document.getElementById(`tab-${tabName}`);
   if (targetTab) targetTab.classList.remove('hidden');
   event.currentTarget.classList.add('bg-blue-600');
+}
+
+// FUNGSI UTAMA: Mengambil database JSON langsung dari repository GitHub
+function fetchCentralData() {
+  if (!navigator.onLine || GH_TOKEN.includes("MOHON_GANTI")) {
+    renderAssetsTable();
+    return;
+  }
+
+  const url = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${GH_FILE_PATH}`;
+  
+  fetch(url, {
+    headers: { "Authorization": `token ${GH_TOKEN}` }
+  })
+  .then(res => {
+    if(res.status === 404) return []; // Jika file database belum ada di github
+    return res.json();
+  })
+  .then(data => {
+    if (data.content) {
+      currentFileSha = data.sha; // Simpan SHA ID file untuk kebutuhan overwrite/update nanti
+      const decodedData = atob(data.content.replace(/\n/g, '')); // Decode base64 dari GitHub
+      databaseAset = JSON.parse(decodedData);
+      localStorage.setItem('db_aset', JSON.stringify(databaseAset));
+    }
+    renderAssetsTable();
+    updateDashboardCounts();
+  })
+  .catch(err => console.error("Gagal sinkronisasi data dari GitHub:", err));
 }
 
 function saveAsset() {
@@ -85,27 +125,87 @@ function saveAsset() {
   }
 
   const newAsset = { id, name, area, status, lastUpdatedBy: currentUser };
+  
   const index = databaseAset.findIndex(a => a.id === id);
-  if (index > -1) {
-    databaseAset[index] = newAsset;
-  } else {
-    databaseAset.push(newAsset);
-  }
+  if (index > -1) databaseAset[index] = newAsset;
+  else databaseAset.push(newAsset);
   localStorage.setItem('db_aset', JSON.stringify(databaseAset));
 
   logActivity(id, `Update kondisi asset: ${name}, Status: ${status}`);
 
   if (!navigator.onLine) {
-    pendingSyncLogs.push({ type: 'ASSET_UPDATE', data: newAsset, time: new Date().toISOString() });
+    // KONDISI OFFLINE: Masukkan ke antrean lokal HP
+    pendingSyncLogs.push(newAsset);
     localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
-    Swal.fire('Modus Offline', 'Data disimpan lokal di HP. Akan otomatis sinkron saat ada internet!', 'info');
+    Swal.fire('Modus Offline', 'Koneksi terputus. Data disimpan di HP & otomatis push ke GitHub saat internet aktif!', 'info');
+    renderAssetsTable();
+    updateDashboardCounts();
   } else {
-    Swal.fire('Sukses', 'Data Berhasil Diupdate dan Sinkron!', 'success');
+    // KONDISI ONLINE: Langsung push commit data ke GitHub API
+    pushDatabaseToGitHub(() => {
+      Swal.fire('Sukses', 'Data Ter-update dan Auto Commit ke GitHub Repo!', 'success');
+    });
   }
 
   generateQRCode(id, name);
-  renderAssetsTable();
-  updateDashboardCounts();
+}
+
+// FUNGSI EMAS: Melakukan Auto Commit JSON secara terprogram tanpa terminal manual
+function pushDatabaseToGitHub(callback) {
+  if (GH_TOKEN.includes("MOHON_GANTI")) return;
+
+  const url = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${GH_FILE_PATH}`;
+  const contentBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(databaseAset, null, 2))));
+  
+  const bodyData = {
+    message: `Aset Otomatis Diperbarui oleh Engineer: ${currentUser}`,
+    content: contentBase64,
+    branch: "main"
+  };
+
+  // Jika file sudah ada di repo, wajib lampirkan SHA agar tidak konflik commit
+  if (currentFileSha) {
+    bodyData.sha = currentFileSha;
+  }
+
+  fetch(url, {
+    method: "PUT",
+    headers: {
+      "Authorization": `token ${GH_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(bodyData)
+  })
+  .then(res => res.json())
+  .then(resData => {
+    if(resData.content) {
+      currentFileSha = resData.content.sha; // Ambil SHA baru pasca sukses commit
+    }
+    if(callback) callback();
+    fetchCentralData();
+  })
+  .catch(err => console.error("Gagal Push Database ke GitHub API:", err));
+}
+
+// OTOMATIS SYNC MASSAL KETIKA ENGINEER DAPAT SINYAL PAKET DATA
+function autoSyncData() {
+  if (pendingSyncLogs.length === 0 || GH_TOKEN.includes("MOHON_GANTI")) return;
+  
+  console.log("Internet Pulih! Memulai push antrean offline massal ke GitHub Repo...");
+  
+  pushDatabaseToGitHub(() => {
+    pendingSyncLogs = [];
+    localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
+    
+    Swal.fire({
+      toast: true,
+      position: 'top-end',
+      icon: 'success',
+      title: 'Auto Sync Sukses! Data lapangan sudah dikirim ke GitHub Repository.',
+      showConfirmButton: false,
+      timer: 4000
+    });
+  });
 }
 
 function generateQRCode(id, name) {
@@ -133,15 +233,6 @@ function logActivity(assetId, description) {
   databaseHistory.unshift(log);
   localStorage.setItem('db_history', JSON.stringify(databaseHistory));
   renderHistoryTable();
-}
-
-function autoSyncData() {
-  if (pendingSyncLogs.length === 0) return;
-  console.log("Mengunggah data perubahan lapangan:", pendingSyncLogs);
-  pendingSyncLogs = [];
-  localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
-  Swal.fire('Auto Sync Berhasil!', 'Data lapangan otomatis disinkronkan ke server.', 'success');
-  updateDashboardCounts();
 }
 
 function openMenuBuilder() {
@@ -225,32 +316,6 @@ function updateDashboardCounts() {
   document.getElementById('dash-offline-count').innerText = pendingSyncLogs.length;
 }
 
-updateDashboardCounts();
-// Ambil status login terakhir dari localStorage saat web dimuat
-let currentUser = localStorage.getItem('current_user') || null;
-let currentRole = localStorage.getItem('current_role') || null;
-
-// Modifikasi fungsi login asli
-const originalLogin = login;
-login = function() {
-  const username = document.getElementById('username').value.trim();
-  const role = document.getElementById('user-role').value;
-  if (username) {
-    localStorage.setItem('current_user', username);
-    localStorage.setItem('current_role', role);
-  }
-  originalLogin();
-};
-
-// Modifikasi fungsi logout asli
-const originalLogout = logout;
-logout = function() {
-  localStorage.removeItem('current_user');
-  localStorage.removeItem('current_role');
-  originalLogout();
-};
-
-// Otomatis bypass login jika user sudah pernah login sebelumnya
 window.addEventListener('DOMContentLoaded', () => {
   if (currentUser && currentRole) {
     document.getElementById('username').value = currentUser;
@@ -258,3 +323,5 @@ window.addEventListener('DOMContentLoaded', () => {
     login();
   }
 });
+
+updateDashboardCounts();
