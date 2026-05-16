@@ -226,3 +226,35 @@ function updateDashboardCounts() {
 }
 
 updateDashboardCounts();
+// Ambil status login terakhir dari localStorage saat web dimuat
+let currentUser = localStorage.getItem('current_user') || null;
+let currentRole = localStorage.getItem('current_role') || null;
+
+// Modifikasi fungsi login asli
+const originalLogin = login;
+login = function() {
+  const username = document.getElementById('username').value.trim();
+  const role = document.getElementById('user-role').value;
+  if (username) {
+    localStorage.setItem('current_user', username);
+    localStorage.setItem('current_role', role);
+  }
+  originalLogin();
+};
+
+// Modifikasi fungsi logout asli
+const originalLogout = logout;
+logout = function() {
+  localStorage.removeItem('current_user');
+  localStorage.removeItem('current_role');
+  originalLogout();
+};
+
+// Otomatis bypass login jika user sudah pernah login sebelumnya
+window.addEventListener('DOMContentLoaded', () => {
+  if (currentUser && currentRole) {
+    document.getElementById('username').value = currentUser;
+    document.getElementById('user-role').value = currentRole;
+    login();
+  }
+});
