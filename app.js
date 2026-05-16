@@ -4,19 +4,13 @@ if ('serviceWorker' in navigator) {
     .catch(err => console.log("Gagal PWA:", err));
 }
 
-// KONFIGURASI DATABASE FULL GITHUB API
-const GH_TOKEN = "github_pat_11A5XXXXXXXX_MOHON_GANTI_DENGAN_TOKEN_ANDA_YANG_ASLI";
-const GH_USER = "MOHON_GANTI_DENGAN_USERNAME_GITHUB_ANDA";
-const GH_REPO = "pp-automation-new";
-const GH_FILE_PATH = "database_aset.json"; // File ini akan otomatis terbuat di GitHub Anda
-
+// DATABASE MENGGUNAKAN LOCAL STORAGE + FITUR EKSPOR SINKRONISASI AMAN
 let currentUser = localStorage.getItem('current_user') || null;
 let currentRole = localStorage.getItem('current_role') || null;
 let databaseAset = JSON.parse(localStorage.getItem('db_aset')) || [];
 let databaseHistory = JSON.parse(localStorage.getItem('db_history')) || [];
 let customMenus = JSON.parse(localStorage.getItem('db_menus')) || [];
 let pendingSyncLogs = JSON.parse(localStorage.getItem('pending_sync')) || [];
-let currentFileSha = null; // Dibutuhkan oleh GitHub API untuk update file
 
 window.addEventListener('online', handleOnlineStatus);
 window.addEventListener('offline', handleOnlineStatus);
@@ -61,7 +55,7 @@ function login() {
 
   logActivity("SYSTEM", `User ${currentUser} berhasil login menggunakan role ${currentRole}`);
   loadCustomMenus();
-  fetchCentralData(); // Tarik data JSON langsung dari repositori GitHub pusat
+  renderAssetsTable();
   renderHistoryTable();
   handleOnlineStatus();
 }
@@ -81,36 +75,7 @@ function switchTab(tabName) {
   document.querySelectorAll('#dynamic-menu button').forEach(btn => btn.classList.remove('bg-blue-600'));
   const targetTab = document.getElementById(`tab-${tabName}`);
   if (targetTab) targetTab.classList.remove('hidden');
-  event.currentTarget.classList.add('bg-blue-600');
-}
-
-// FUNGSI UTAMA: Mengambil database JSON langsung dari repository GitHub
-function fetchCentralData() {
-  if (!navigator.onLine || GH_TOKEN.includes("MOHON_GANTI")) {
-    renderAssetsTable();
-    return;
-  }
-
-  const url = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${GH_FILE_PATH}`;
-  
-  fetch(url, {
-    headers: { "Authorization": `token ${GH_TOKEN}` }
-  })
-  .then(res => {
-    if(res.status === 404) return []; // Jika file database belum ada di github
-    return res.json();
-  })
-  .then(data => {
-    if (data.content) {
-      currentFileSha = data.sha; // Simpan SHA ID file untuk kebutuhan overwrite/update nanti
-      const decodedData = atob(data.content.replace(/\n/g, '')); // Decode base64 dari GitHub
-      databaseAset = JSON.parse(decodedData);
-      localStorage.setItem('db_aset', JSON.stringify(databaseAset));
-    }
-    renderAssetsTable();
-    updateDashboardCounts();
-  })
-  .catch(err => console.error("Gagal sinkronisasi data dari GitHub:", err));
+  if(event) event.currentTarget.classList.add('bg-blue-600');
 }
 
 function saveAsset() {
@@ -134,77 +99,43 @@ function saveAsset() {
   logActivity(id, `Update kondisi asset: ${name}, Status: ${status}`);
 
   if (!navigator.onLine) {
-    // KONDISI OFFLINE: Masukkan ke antrean lokal HP
     pendingSyncLogs.push(newAsset);
     localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
-    Swal.fire('Modus Offline', 'Koneksi terputus. Data disimpan di HP & otomatis push ke GitHub saat internet aktif!', 'info');
-    renderAssetsTable();
-    updateDashboardCounts();
+    Swal.fire('Modus Offline', 'Koneksi terputus. Data disimpan aman di memori lokal HP!', 'info');
   } else {
-    // KONDISI ONLINE: Langsung push commit data ke GitHub API
-    pushDatabaseToGitHub(() => {
-      Swal.fire('Sukses', 'Data Ter-update dan Auto Commit ke GitHub Repo!', 'success');
-    });
+    Swal.fire('Sukses', 'Data Berhasil Diupdate di dalam Sistem!', 'success');
   }
 
   generateQRCode(id, name);
+  renderAssetsTable();
+  updateDashboardCounts();
 }
 
-// FUNGSI EMAS: Melakukan Auto Commit JSON secara terprogram tanpa terminal manual
-function pushDatabaseToGitHub(callback) {
-  if (GH_TOKEN.includes("MOHON_GANTI")) return;
-
-  const url = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${GH_FILE_PATH}`;
-  const contentBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(databaseAset, null, 2))));
-  
-  const bodyData = {
-    message: `Aset Otomatis Diperbarui oleh Engineer: ${currentUser}`,
-    content: contentBase64,
-    branch: "main"
-  };
-
-  // Jika file sudah ada di repo, wajib lampirkan SHA agar tidak konflik commit
-  if (currentFileSha) {
-    bodyData.sha = currentFileSha;
-  }
-
-  fetch(url, {
-    method: "PUT",
-    headers: {
-      "Authorization": `token ${GH_TOKEN}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(bodyData)
-  })
-  .then(res => res.json())
-  .then(resData => {
-    if(resData.content) {
-      currentFileSha = resData.content.sha; // Ambil SHA baru pasca sukses commit
-    }
-    if(callback) callback();
-    fetchCentralData();
-  })
-  .catch(err => console.error("Gagal Push Database ke GitHub API:", err));
-}
-
-// OTOMATIS SYNC MASSAL KETIKA ENGINEER DAPAT SINYAL PAKET DATA
+// FITUR SOLUSI SINKRONISASI SAKTI TANPA TOKEN (KIRIM DATA VIA COPY-PASTE DATA)
 function autoSyncData() {
-  if (pendingSyncLogs.length === 0 || GH_TOKEN.includes("MOHON_GANTI")) return;
+  if (pendingSyncLogs.length === 0) return;
   
-  console.log("Internet Pulih! Memulai push antrean offline massal ke GitHub Repo...");
+  // Menampilkan pop-up berisi string JSON data lapangan untuk ditransfer instan ke laptop
+  const dataString = JSON.stringify(pendingSyncLogs, null, 2);
   
-  pushDatabaseToGitHub(() => {
-    pendingSyncLogs = [];
-    localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
-    
-    Swal.fire({
-      toast: true,
-      position: 'top-end',
-      icon: 'success',
-      title: 'Auto Sync Sukses! Data lapangan sudah dikirim ke GitHub Repository.',
-      showConfirmButton: false,
-      timer: 4000
-    });
+  Swal.fire({
+    title: 'Ada Data Lapangan Belum Sinkron!',
+    html: `<p class="text-sm mb-2 text-gray-400">Salin kode di bawah ini lalu paste ke laptop Anda, atau kirim ke WhatsApp Admin pusat:</p>
+           <textarea id="sync-copy-area" class="w-full h-32 p-2 bg-gray-800 text-green-400 font-mono text-xs rounded border border-gray-600" readonly>${dataString}</textarea>`,
+    confirmButtonText: 'Salin Ke Clipboard & Tandai Sinkron',
+    showCancelButton: true,
+    cancelButtonText: 'Nanti Saja'
+  }).then((result) => {
+    if (result.isConfirmed) {
+      const copyText = document.getElementById("sync-copy-area");
+      copyText.select();
+      navigator.clipboard.writeText(copyText.value);
+      
+      pendingSyncLogs = [];
+      localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
+      Swal.fire('Berhasil Disalin!', 'Data siap dikirim. Antrean data lokal telah dikosongkan.', 'success');
+      updateDashboardCounts();
+    }
   });
 }
 
@@ -284,6 +215,7 @@ function loadCustomMenus() {
 
 function renderAssetsTable() {
   const tbody = document.getElementById('asset-table-body');
+  if(!tbody) return;
   tbody.innerHTML = databaseAset.map(asset => `
     <tr class="hover:bg-gray-700 transition">
       <td class="p-4 font-mono font-bold text-yellow-400">${asset.id}</td>
@@ -299,6 +231,7 @@ function renderAssetsTable() {
 
 function renderHistoryTable() {
   const tbody = document.getElementById('history-table-body');
+  if(!tbody) return;
   tbody.innerHTML = databaseHistory.map(h => `
     <tr class="text-xs hover:bg-gray-700 transition">
       <td class="p-4 text-gray-400">${h.timestamp}</td>
@@ -311,6 +244,7 @@ function renderHistoryTable() {
 }
 
 function updateDashboardCounts() {
+  if(!document.getElementById('dash-total-asset')) return;
   document.getElementById('dash-total-asset').innerText = databaseAset.length;
   document.getElementById('dash-total-repair').innerText = databaseHistory.filter(h => !h.desc.includes("login") && !h.desc.includes("logout")).length;
   document.getElementById('dash-offline-count').innerText = pendingSyncLogs.length;
