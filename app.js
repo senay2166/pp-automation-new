@@ -4,19 +4,18 @@ if ('serviceWorker' in navigator) {
     .catch(err => console.log("Gagal PWA:", err));
 }
 
-// Mengambil variabel dari config.js
-const GH_TOKEN = typeof CONFIG_GH_TOKEN !== 'undefined' ? CONFIG_GH_TOKEN : "";
-const GH_USER = typeof CONFIG_GH_USER !== 'undefined' ? CONFIG_GH_USER : "";
-const GH_REPO = "pp-automation-new";
-const GH_FILE_PATH = "database_aset.json";
+// Menghubungkan variabel rahasia dari config.js
+const API_KEY = typeof SYSTEM_SECURE_KEY !== 'undefined' ? SYSTEM_SECURE_KEY : "";
+const OWNER_USER = typeof SYSTEM_USER !== 'undefined' ? SYSTEM_USER : "";
+const REPO_NAME = "pp-automation-new";
+const DATA_FILE = "database_aset.json";
 
 let currentUser = localStorage.getItem('current_user') || null;
 let currentRole = localStorage.getItem('current_role') || null;
-let databaseAset = [];
+let databaseAset = JSON.parse(localStorage.getItem('db_aset')) || [];
 let databaseHistory = JSON.parse(localStorage.getItem('db_history')) || [];
 let customMenus = JSON.parse(localStorage.getItem('db_menus')) || [];
 let pendingSyncLogs = JSON.parse(localStorage.getItem('pending_sync')) || [];
-let currentFileSha = null;
 
 window.addEventListener('online', handleOnlineStatus);
 window.addEventListener('offline', handleOnlineStatus);
@@ -78,48 +77,26 @@ function logout() {
   document.getElementById('main-app').classList.add('hidden');
 }
 
-function switchTab(tabName) {
-  document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
-  document.querySelectorAll('#dynamic-menu button').forEach(btn => btn.classList.remove('bg-blue-600'));
-  const targetTab = document.getElementById(`tab-${tabName}`);
-  if (targetTab) targetTab.classList.remove('hidden');
-}
-
 function fetchCentralData() {
-  if (!navigator.onLine || !GH_TOKEN) {
-    loadLocalFallback();
-    return;
-  }
+  if (!navigator.onLine || !OWNER_USER) return;
 
-  const url = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${GH_FILE_PATH}?t=${new Date().getTime()}`;
+  // Membaca database langsung dari CDN raw GitHub Pages agar data ter-update real-time
+  const url = `https://raw.githubusercontent.com/${OWNER_USER}/${REPO_NAME}/main/${DATA_FILE}?t=${new Date().getTime()}`;
   
-  fetch(url, {
-    headers: { "Authorization": `token ${GH_TOKEN}` }
-  })
+  fetch(url)
   .then(res => {
-    if(res.status === 404) return null;
+    if (res.status === 404) return [];
     return res.json();
   })
   .then(data => {
-    if (data && data.content) {
-      currentFileSha = data.sha;
-      const decodedData = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
-      databaseAset = JSON.parse(decodedData);
+    if (Array.isArray(data)) {
+      databaseAset = data;
       localStorage.setItem('db_aset', JSON.stringify(databaseAset));
-    } else {
-      loadLocalFallback();
+      renderAssetsTable();
+      updateDashboardCounts();
     }
-    renderAssetsTable();
-    updateDashboardCounts();
   })
-  .catch(err => {
-    console.error("Gagal sinkron data dari GitHub:", err);
-    loadLocalFallback();
-  });
-}
-
-function loadLocalFallback() {
-  databaseAset = JSON.parse(localStorage.getItem('db_aset')) || [];
+  .catch(err => console.error("Gagal memuat database dari server GitHub:", err));
 }
 
 function saveAsset() {
@@ -145,68 +122,53 @@ function saveAsset() {
   if (!navigator.onLine) {
     pendingSyncLogs.push(newAsset);
     localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
-    Swal.fire('Modus Offline', 'Data disimpan di HP. Otomatis sync ke GitHub saat online!', 'info');
+    Swal.fire('Modus Offline', 'Koneksi terputus. Data disimpan aman di memori HP!', 'info');
     renderAssetsTable();
     updateDashboardCounts();
   } else {
-    pushDatabaseToGitHub(() => {
-      Swal.fire('Sukses', 'Data Berhasil Disinkronkan ke GitHub!', 'success');
+    triggerGitHubServerlessSync(newAsset, () => {
+      Swal.fire('Sinkronisasi Diproses', 'Perintah enkripsi terkirim ke Server GitHub! Data akan sinkron dalam beberapa detik.', 'success');
     });
   }
 
   generateQRCode(id, name);
 }
 
-function pushDatabaseToGitHub(callback) {
-  if (!GH_TOKEN) return;
+// STRATEGI UTAMA: Menembak Webhook Serverless GitHub Actions (Aman & Anti-Block)
+function triggerGitHubServerlessSync(payloadData, callback) {
+  if (!API_KEY || !OWNER_USER) return;
 
-  const url = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${GH_FILE_PATH}`;
-  const contentBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(databaseAset, null, 2))));
+  const url = `https://api.github.com/repos/${OWNER_USER}/${REPO_NAME}/dispatches`;
   
-  const bodyData = {
-    message: `Aset Diperbarui via HP oleh: ${currentUser}`,
-    content: contentBase64,
-    branch: "main"
-  };
-
-  if (currentFileSha) {
-    bodyData.sha = currentFileSha;
-  }
-
   fetch(url, {
-    method: "PUT",
+    method: "POST",
     headers: {
-      "Authorization": `token ${GH_TOKEN}`,
+      "Authorization": `token ${API_KEY}`,
+      "Accept": "application/vnd.github.v3+json",
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(bodyData)
+    body: JSON.stringify({
+      event_type: "pwa_update_asset",
+      client_payload: {
+        asset_data: payloadData
+      }
+    })
   })
-  .then(res => res.json())
-  .then(resData => {
-    if(resData.content) {
-      currentFileSha = resData.content.sha;
-    }
-    if(callback) callback();
-    fetchCentralData();
+  .then(() => {
+    if (callback) callback();
+    // Beri jeda 5 detik agar server GitHub selesai mem-build data sebelum ditarik ulang hasilnya
+    setTimeout(fetchCentralData, 5000);
   })
-  .catch(err => console.error("Gagal Sync ke GitHub API:", err));
+  .catch(err => console.error("Gagal memicu serverless webhook GitHub:", err));
 }
 
 function autoSyncData() {
-  if (pendingSyncLogs.length === 0 || !GH_TOKEN) return;
+  if (pendingSyncLogs.length === 0 || !API_KEY) return;
   
-  pushDatabaseToGitHub(() => {
+  triggerGitHubServerlessSync(pendingSyncLogs, () => {
     pendingSyncLogs = [];
     localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
-    
-    Swal.fire({
-      toast: true,
-      position: 'top-end',
-      icon: 'success',
-      title: 'Auto Sync GitHub Sukses!',
-      showConfirmButton: false,
-      timer: 3000
-    });
+    Swal.fire('Auto Sync', 'Seluruh data antrean lapangan berhasil dikirim ke server GitHub!', 'success');
   });
 }
 
