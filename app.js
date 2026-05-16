@@ -4,26 +4,34 @@ if ('serviceWorker' in navigator) {
     .catch(err => console.log("Gagal PWA:", err));
 }
 
-// DATABASE MENGGUNAKAN LOCAL STORAGE + FITUR EKSPOR SINKRONISASI AMAN
+// Mengambil variabel dari config.js
+const GH_TOKEN = typeof CONFIG_GH_TOKEN !== 'undefined' ? CONFIG_GH_TOKEN : "";
+const GH_USER = typeof CONFIG_GH_USER !== 'undefined' ? CONFIG_GH_USER : "";
+const GH_REPO = "pp-automation-new";
+const GH_FILE_PATH = "database_aset.json";
+
 let currentUser = localStorage.getItem('current_user') || null;
 let currentRole = localStorage.getItem('current_role') || null;
-let databaseAset = JSON.parse(localStorage.getItem('db_aset')) || [];
+let databaseAset = [];
 let databaseHistory = JSON.parse(localStorage.getItem('db_history')) || [];
 let customMenus = JSON.parse(localStorage.getItem('db_menus')) || [];
 let pendingSyncLogs = JSON.parse(localStorage.getItem('pending_sync')) || [];
+let currentFileSha = null;
 
 window.addEventListener('online', handleOnlineStatus);
 window.addEventListener('offline', handleOnlineStatus);
 
 function handleOnlineStatus() {
   const statusEl = document.getElementById('sync-status');
-  if (navigator.onLine) {
-    statusEl.innerText = "Online";
-    statusEl.className = "px-2 py-1 text-xs rounded bg-green-500 text-white font-bold";
-    autoSyncData(); 
-  } else {
-    statusEl.innerText = "Offline Mode";
-    statusEl.className = "px-2 py-1 text-xs rounded bg-red-500 text-white font-bold";
+  if (statusEl) {
+    if (navigator.onLine) {
+      statusEl.innerText = "Online";
+      statusEl.className = "px-2 py-1 text-xs rounded bg-green-500 text-white font-bold";
+      autoSyncData(); 
+    } else {
+      statusEl.innerText = "Offline Mode";
+      statusEl.className = "px-2 py-1 text-xs rounded bg-red-500 text-white font-bold";
+    }
   }
   updateDashboardCounts();
 }
@@ -55,7 +63,7 @@ function login() {
 
   logActivity("SYSTEM", `User ${currentUser} berhasil login menggunakan role ${currentRole}`);
   loadCustomMenus();
-  renderAssetsTable();
+  fetchCentralData(); 
   renderHistoryTable();
   handleOnlineStatus();
 }
@@ -75,7 +83,43 @@ function switchTab(tabName) {
   document.querySelectorAll('#dynamic-menu button').forEach(btn => btn.classList.remove('bg-blue-600'));
   const targetTab = document.getElementById(`tab-${tabName}`);
   if (targetTab) targetTab.classList.remove('hidden');
-  if(event) event.currentTarget.classList.add('bg-blue-600');
+}
+
+function fetchCentralData() {
+  if (!navigator.onLine || !GH_TOKEN) {
+    loadLocalFallback();
+    return;
+  }
+
+  const url = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${GH_FILE_PATH}?t=${new Date().getTime()}`;
+  
+  fetch(url, {
+    headers: { "Authorization": `token ${GH_TOKEN}` }
+  })
+  .then(res => {
+    if(res.status === 404) return null;
+    return res.json();
+  })
+  .then(data => {
+    if (data && data.content) {
+      currentFileSha = data.sha;
+      const decodedData = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
+      databaseAset = JSON.parse(decodedData);
+      localStorage.setItem('db_aset', JSON.stringify(databaseAset));
+    } else {
+      loadLocalFallback();
+    }
+    renderAssetsTable();
+    updateDashboardCounts();
+  })
+  .catch(err => {
+    console.error("Gagal sinkron data dari GitHub:", err);
+    loadLocalFallback();
+  });
+}
+
+function loadLocalFallback() {
+  databaseAset = JSON.parse(localStorage.getItem('db_aset')) || [];
 }
 
 function saveAsset() {
@@ -101,46 +145,74 @@ function saveAsset() {
   if (!navigator.onLine) {
     pendingSyncLogs.push(newAsset);
     localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
-    Swal.fire('Modus Offline', 'Koneksi terputus. Data disimpan aman di memori lokal HP!', 'info');
+    Swal.fire('Modus Offline', 'Data disimpan di HP. Otomatis sync ke GitHub saat online!', 'info');
+    renderAssetsTable();
+    updateDashboardCounts();
   } else {
-    Swal.fire('Sukses', 'Data Berhasil Diupdate di dalam Sistem!', 'success');
+    pushDatabaseToGitHub(() => {
+      Swal.fire('Sukses', 'Data Berhasil Disinkronkan ke GitHub!', 'success');
+    });
   }
 
   generateQRCode(id, name);
-  renderAssetsTable();
-  updateDashboardCounts();
 }
 
-// FITUR SOLUSI SINKRONISASI SAKTI TANPA TOKEN (KIRIM DATA VIA COPY-PASTE DATA)
-function autoSyncData() {
-  if (pendingSyncLogs.length === 0) return;
+function pushDatabaseToGitHub(callback) {
+  if (!GH_TOKEN) return;
+
+  const url = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${GH_FILE_PATH}`;
+  const contentBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(databaseAset, null, 2))));
   
-  // Menampilkan pop-up berisi string JSON data lapangan untuk ditransfer instan ke laptop
-  const dataString = JSON.stringify(pendingSyncLogs, null, 2);
-  
-  Swal.fire({
-    title: 'Ada Data Lapangan Belum Sinkron!',
-    html: `<p class="text-sm mb-2 text-gray-400">Salin kode di bawah ini lalu paste ke laptop Anda, atau kirim ke WhatsApp Admin pusat:</p>
-           <textarea id="sync-copy-area" class="w-full h-32 p-2 bg-gray-800 text-green-400 font-mono text-xs rounded border border-gray-600" readonly>${dataString}</textarea>`,
-    confirmButtonText: 'Salin Ke Clipboard & Tandai Sinkron',
-    showCancelButton: true,
-    cancelButtonText: 'Nanti Saja'
-  }).then((result) => {
-    if (result.isConfirmed) {
-      const copyText = document.getElementById("sync-copy-area");
-      copyText.select();
-      navigator.clipboard.writeText(copyText.value);
-      
-      pendingSyncLogs = [];
-      localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
-      Swal.fire('Berhasil Disalin!', 'Data siap dikirim. Antrean data lokal telah dikosongkan.', 'success');
-      updateDashboardCounts();
+  const bodyData = {
+    message: `Aset Diperbarui via HP oleh: ${currentUser}`,
+    content: contentBase64,
+    branch: "main"
+  };
+
+  if (currentFileSha) {
+    bodyData.sha = currentFileSha;
+  }
+
+  fetch(url, {
+    method: "PUT",
+    headers: {
+      "Authorization": `token ${GH_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(bodyData)
+  })
+  .then(res => res.json())
+  .then(resData => {
+    if(resData.content) {
+      currentFileSha = resData.content.sha;
     }
+    if(callback) callback();
+    fetchCentralData();
+  })
+  .catch(err => console.error("Gagal Sync ke GitHub API:", err));
+}
+
+function autoSyncData() {
+  if (pendingSyncLogs.length === 0 || !GH_TOKEN) return;
+  
+  pushDatabaseToGitHub(() => {
+    pendingSyncLogs = [];
+    localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
+    
+    Swal.fire({
+      toast: true,
+      position: 'top-end',
+      icon: 'success',
+      title: 'Auto Sync GitHub Sukses!',
+      showConfirmButton: false,
+      timer: 3000
+    });
   });
 }
 
 function generateQRCode(id, name) {
   const qrContainer = document.getElementById('qrcode');
+  if(!qrContainer) return;
   qrContainer.innerHTML = ""; 
   document.getElementById('qr-wrapper').classList.remove('hidden');
   document.getElementById('qr-label').innerText = `${id} - ${name}`;
@@ -192,6 +264,7 @@ function openMenuBuilder() {
 
 function loadCustomMenus() {
   const menuNav = document.getElementById('dynamic-menu');
+  if(!menuNav) return;
   document.querySelectorAll('.custom-menu-btn').forEach(el => el.remove());
 
   customMenus.forEach(menu => {
@@ -206,8 +279,6 @@ function loadCustomMenus() {
         <button onclick="Swal.fire('Fitur GUI Active','Aksi Berhasil Di-trigger untuk area ${currentRole}','success')" class="bg-purple-600 p-3 rounded font-bold">⚡ Jalankan Otomasi</button>
       `;
       template.classList.remove('hidden');
-      document.querySelectorAll('#dynamic-menu button').forEach(b => b.classList.remove('bg-blue-600'));
-      btn.classList.add('bg-blue-600');
     };
     menuNav.appendChild(btn);
   });
@@ -257,5 +328,3 @@ window.addEventListener('DOMContentLoaded', () => {
     login();
   }
 });
-
-updateDashboardCounts();
