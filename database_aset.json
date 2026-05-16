@@ -1,0 +1,16 @@
+[
+  {
+    "id": "AST-001",
+    "name": "Mesin Pompa Utama",
+    "area": "Sorowako",
+    "status": "Normal",
+    "lastUpdatedBy": "System"
+  },
+  {
+    "id": "AST-002",
+    "name": "Server Otomasi Kantor",
+    "area": "Bogor",
+    "status": "Normal",
+    "lastUpdatedBy": "System"
+  }
+]
