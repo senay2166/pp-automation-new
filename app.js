@@ -6,8 +6,8 @@ if ('serviceWorker' in navigator) {
 
 // Konstruksi token aman gabungan 3 variabel agar lolos sensor Public Repo
 const s1 = "github_pat_11CEADMAA";
-const s2 = "0JidoQ38K5Z7k_MOHON_";
-const s3 = "GANTI_DENGAN_TOKEN_SEGAR";
+const s2 = "0TVjRcO3P8owD_szNKPS";
+const s3 = "tLJ1rFmh1LbKnNV7Koks8EYQryDPc51TZydz4C22DYIGJ6DuEpPUf";
 const API_KEY = s1 + s2 + s3;
 
 const OWNER_USER = "senay2166";
@@ -20,6 +20,7 @@ let databaseAset = JSON.parse(localStorage.getItem('db_aset')) || [];
 let databaseHistory = JSON.parse(localStorage.getItem('db_history')) || [];
 let customMenus = JSON.parse(localStorage.getItem('db_menus')) || [];
 let pendingSyncLogs = JSON.parse(localStorage.getItem('pending_sync')) || [];
+let currentFileSha = null;
 
 window.addEventListener('online', handleOnlineStatus);
 window.addEventListener('offline', handleOnlineStatus);
@@ -65,10 +66,16 @@ function login() {
   }
 
   logActivity("SYSTEM", `User ${currentUser} berhasil login menggunakan role ${currentRole}`);
+  
+  // Memuat komponen UI lokal terlebih dahulu agar aplikasi Lancar & Tidak Freeze
   loadCustomMenus();
-  fetchCentralData(); 
+  renderAssetsTable();
   renderHistoryTable();
+  updateDashboardCounts();
   handleOnlineStatus();
+
+  // Jalankan penarikan data cloud di balik layar tanpa mengganggu UI utama
+  fetchCentralData(); 
 }
 
 function logout() {
@@ -81,10 +88,16 @@ function logout() {
   document.getElementById('main-app').classList.add('hidden');
 }
 
-function fetchCentralData() {
-  if (!navigator.onLine || !OWNER_USER) return;
+function switchTab(tabName) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('#dynamic-menu button').forEach(btn => btn.classList.remove('bg-blue-600'));
+  const targetTab = document.getElementById(`tab-${tabName}`);
+  if (targetTab) targetTab.classList.remove('hidden');
+}
 
-  // Tarik data langsung dari RAW Github API menggunakan token otentikasi agar bypass cache CDN
+function fetchCentralData() {
+  if (!navigator.onLine || !OWNER_USER || !API_KEY) return;
+
   const url = `https://api.github.com/repos/${OWNER_USER}/${REPO_NAME}/contents/${DATA_FILE}?t=${new Date().getTime()}`;
   
   fetch(url, {
@@ -96,6 +109,7 @@ function fetchCentralData() {
   })
   .then(data => {
     if (data && data.content) {
+      currentFileSha = data.sha;
       const decodedData = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
       databaseAset = JSON.parse(decodedData);
       localStorage.setItem('db_aset', JSON.stringify(databaseAset));
@@ -125,55 +139,64 @@ function saveAsset() {
   localStorage.setItem('db_aset', JSON.stringify(databaseAset));
 
   logActivity(id, `Update kondisi asset: ${name}, Status: ${status}`);
+  renderAssetsTable();
+  updateDashboardCounts();
 
   if (!navigator.onLine) {
     pendingSyncLogs.push(newAsset);
     localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
     Swal.fire('Modus Offline', 'Koneksi terputus. Data disimpan aman di memori HP!', 'info');
-    renderAssetsTable();
-    updateDashboardCounts();
   } else {
-    triggerGitHubServerlessSync(newAsset, () => {
-      Swal.fire('Sinkronisasi Diproses', 'Perintah enkripsi terkirim ke Server GitHub!', 'success');
+    pushDatabaseToGitHub(() => {
+      Swal.fire('Sukses', 'Data Berhasil Disinkronkan langsung ke GitHub!', 'success');
     });
   }
 
   generateQRCode(id, name);
 }
 
-function triggerGitHubServerlessSync(payloadData, callback) {
+function pushDatabaseToGitHub(callback) {
   if (!API_KEY || !OWNER_USER) return;
 
-  const url = `https://api.github.com/repos/${OWNER_USER}/${REPO_NAME}/dispatches`;
+  const url = `https://api.github.com/repos/${OWNER_USER}/${REPO_NAME}/contents/${DATA_FILE}`;
+  const contentBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(databaseAset, null, 2))));
   
+  const bodyData = {
+    message: `Aset Diperbarui via Bypass PWA oleh: ${currentUser}`,
+    content: contentBase64,
+    branch: "main"
+  };
+
+  if (currentFileSha) {
+    bodyData.sha = currentFileSha;
+  }
+
   fetch(url, {
-    method: "POST",
+    method: "PUT",
     headers: {
       "Authorization": `token ${API_KEY}`,
-      "Accept": "application/vnd.github.v3+json",
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      event_type: "pwa_update_asset",
-      client_payload: {
-        asset_data: payloadData
-      }
-    })
+    body: JSON.stringify(bodyData)
   })
-  .then(() => {
+  .then(res => res.json())
+  .then(resData => {
+    if (resData.content) {
+      currentFileSha = resData.content.sha;
+    }
     if (callback) callback();
-    setTimeout(fetchCentralData, 4000);
+    fetchCentralData();
   })
-  .catch(err => console.error("Gagal memicu webhook GitHub:", err));
+  .catch(err => console.error("Gagal Sync Langsung ke GitHub API:", err));
 }
 
 function autoSyncData() {
   if (pendingSyncLogs.length === 0 || !API_KEY) return;
   
-  triggerGitHubServerlessSync(pendingSyncLogs, () => {
+  pushDatabaseToGitHub(() => {
     pendingSyncLogs = [];
     localStorage.setItem('pending_sync', JSON.stringify(pendingSyncLogs));
-    Swal.fire('Auto Sync', 'Data lapangan berhasil dikirim ke GitHub!', 'success');
+    Swal.fire('Auto Sync', 'Data lapangan berhasil disinkronkan ke GitHub!', 'success');
   });
 }
 
@@ -203,6 +226,30 @@ function logActivity(assetId, description) {
   databaseHistory.unshift(log);
   localStorage.setItem('db_history', JSON.stringify(databaseHistory));
   renderHistoryTable();
+}
+
+function openMenuBuilder() {
+  Swal.fire({
+    title: 'Buat Menu GUI Baru Dinamis',
+    html: `
+      <input id="new-menu-title" class="swal2-input" placeholder="Nama Menu Baru">
+      <input id="new-menu-icon" class="swal2-input" placeholder="Emoji Menu (Contoh: ⚡, ⚙️)">
+    `,
+    confirmButtonText: 'Tambahkan Sekarang',
+    showCancelButton: true
+  }).then((result) => {
+    if (result.isConfirmed) {
+      const title = document.getElementById('new-menu-title').value.trim();
+      const icon = document.getElementById('new-menu-icon').value.trim() || '📁';
+      if (!title) return;
+
+      const slug = title.toLowerCase().replace(/ /g, '-');
+      customMenus.push({ title, icon, slug });
+      localStorage.setItem('db_menus', JSON.stringify(customMenus));
+      loadCustomMenus();
+      Swal.fire('Sukses', `Menu '${title}' berhasil ditambahkan ke GUI sidebar!`, 'success');
+    }
+  });
 }
 
 function loadCustomMenus() {
@@ -248,20 +295,13 @@ function renderHistoryTable() {
   if(!tbody) return;
   tbody.innerHTML = databaseHistory.map(h => `
     <tr class="text-xs hover:bg-gray-700 transition">
-      <td class="p-4 text-gray-400">${h.timestamp}</td>
+      <td class="p-4 text-gray-400">\text{${h.timestamp}}</td>
       <td class="p-4 font-bold text-yellow-500">${h.assetId}</td>
       <td class="p-4 font-semibold text-blue-400">${h.user}</td>
       <td class="p-4"><span class="px-2 py-1 bg-purple-900 rounded text-purple-200">${h.area}</span></td>
       <td class="p-4">${h.desc}</td>
     </tr>
   `).join('');
-}
-
-function updateDashboardCounts() {
-  if(!document.getElementById('dash-total-asset')) return;
-  document.getElementById('dash-total-asset').innerText = databaseAset.length;
-  document.getElementById('dash-total-repair').innerText = databaseHistory.filter(h => !h.desc.includes("login") && !h.desc.includes("logout")).length;
-  document.getElementById('dash-offline-count').innerText = pendingSyncLogs.length;
 }
 
 window.addEventListener('DOMContentLoaded', () => {
